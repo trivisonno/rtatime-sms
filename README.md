@@ -38,18 +38,20 @@ Ensure that you have Python 3+ installed on your system. I recommend using pipen
 
 * Python 3.8, Flask, Zappa, Twilio
 * If using the database feature, the [pgAdmin4](https://www.pgadmin.org/) application may be helpful, but is optional.
-* Assumes knowledge of command-line.
+* Assumes knowledge of command-line and AWS account is already configured.
 
 
 ### Installing
 
-* Clone the repo into your local directory for testing
+* Download the repo to your computer
 * Create a pipenv for your pip packages such as flask and/or zappa
+* Accept all of the Zappa defaults when you run **zappa init**
 ```
 git clone https://www.github.com/trivisonno/rtatime-sms
 cd rtatime-sms
 pipenv shell --python 3.8
 pip install flask zappa twilio
+zappa init
 ```
 
 If using the optional database, also install psycopg2 and timezone/pytz modules:
@@ -57,40 +59,71 @@ If using the optional database, also install psycopg2 and timezone/pytz modules:
 pip install aws-psycopg2 psycopg2-binary pytz
 ```
 
-To test locally:
+
+### Connecting to Twilio
+After installing the required Python packages, the app and your Twilio account must be connected together. First, create a Twilio account ([instructions](https://www.youtube.com/watch?v=vMG3iIqflR8&t=180s)). Next, select a phone number to use with the app ([instructions](https://www.youtube.com/watch?v=vMG3iIqflR8&t=394s)). Third, find your Account SID and Auth Token on your Twilio Console ([instructions](https://www.youtube.com/watch?v=Kcnplo9Z_F4)). The Account SID and Auth Token are two important variables that we need for the next step below. (It's worth noting here that if you use only a free trial account on Twilio, all of your SMS messages will have extra text added to them, and you will be sandboxed and able to text only numbers that you can personally verify as your own. Upgrade to a normal paid account to unlock all of the texting features.)
+
+The app uses environment variables that are set in a **zappa_settings.json** file that is created after the zappa init command above. Open that file in your text editor and add the following variables with the appropriate information similar to the included **zappa_settings.sample.json** file:
+```
+    "include": [
+            "routesAtEachStop.json", "test-postedStopIDMapping.json", "test-rta_stops.geojson"
+        ],
+        "environment_variables": {
+            "twilio_account_sid": "<YOUR_TWILIO_ACCOUNT_SID_HERE>",
+            "twilio_auth_token": "<YOUR_TWILIO_AUTH_TOKEN_HERE>",
+            "psycopg2_user": "",
+            "psycopg2_password": "",
+            "psycopg2_host": "",
+            "psycopg2_dbname": "",
+            "psycopg2_port": "",
+            "debug_phone_number": ""
+        }
+```
+
+Once the Account SID and Auth Token is added to the zappa_settings.json file, we can begin testing the app locally with Flask and/or deploy to AWS with Zappa.
+
+Testing locally doesn't actually send any SMS messages, but you can test how the messages would look, just by using your web browser. To test locally with Flask, run from the command-line:
 ```
 export FLASK_APP=app.py
 flask run
 ```
+This starts a local web server on your computer, usually on port 5000. If it uses some other port, make sure to use that port number in the URL below.
 
-Try a 5-digit stop number (Stop # 03457 as example) in the Body parameter and include a 10-digit phone number in the From parameter:
+Try a 5-digit stop number (Stop # 03457 as example) in the Body parameter and include a 10-digit phone number in the From parameter, using your web browser:
 ```
 http://127.0.0.1:5000/sms?Body=03457&From=+15555555555
 ```
 
-If you have an AWS account set up and are ready to deploy to AWS Lambda for real-world use, then deploy with zappa:
+In your web browser, you should see text like this:
 ```
-$ pip install zappa
-$ zappa init
-$ zappa deploy dev
+DETROIT AV & W 65TH ST 26: 503p, 531p 26A: 522p
 ```
 
-Zappa will automatically create an API Gateway URL for you to use as a Webhook with the Twilio messaging system. Your URL should end in /sms, like below
+Don't worry, the SMS messages are properly formatted with line breaks when sent.
+
+Once you confirm that the app is retrieving correct real-time arrival data from GCRTA's systems, we can deploy to AWS using Zappa.
+
+Deploy with zappa:
 ```
-https://abc1234.execute-api.us-east-1.amazonaws.com/dev/sms
+zappa deploy dev
 ```
 
-Once deployed to AWS, you can test easily from your browser by trying
+Zappa will automatically create an API Gateway URL for you, and you'll see something like this below in your Terminal command-line:
+```
+Your updated Zappa deployment is live!: https://abc1234.execute-api.us-east-1.amazonaws.com/dev
+```
+
+Once deployed to AWS, you can also test the app from your web browser:
 ```
 https://abc1234.execute-api.us-east-1.amazonaws.com/dev/sms?Body=03457&From=+15555555555
 ```
 
-Both will return text for an SMS reply message.
+Now, we will go to the Twilio Console and use our API Gateway URL as a Webhook with the Twilio messaging system. [Here's](https://youtu.be/SHt21VwFj-A?t=21) a video explaining where to go to update your Webhook URL. In the Messaging section, add your URL to the "When A Message Comes In" field, and leave "Webhook" and "HTTP POST" selected. Also add '/sms' to the end, so the URL looks like this:
 ```
-DETROIT AV & W 65TH ST
-26: 1131a, 1147a
-26A: 1117a
+https://abc1234.execute-api.us-east-1.amazonaws.com/dev/sms
 ```
+
+Now, SMS message data will be forwarded to your app for a reply with the arrival info.
 
 If you choose to use the database features to track app usage, then there is also a Dashboard panel provided that can be accessed at:
 ```
@@ -99,10 +132,10 @@ https://abc1234.execute-api.us-east-1.amazonaws.com/dev/panel
 ```
 If you use this database feature, you should also consider any privacy issues and have a plan for handling and storing riders' phone numbers outside of the Twilio service.
 
-
-### Connecting to Twilio
-After deploying your SMS app to the cloud, you will configure Twilio to send a POST request to your API Gateway URL upon receipt of an SMS message from a user. Visit your Twilio console and navigate to the [Manage Active Numbers](https://console.twilio.com/us1/develop/phone-numbers/manage/active) page and select the virtual phone number for the app. Add your AWS API Gateway link in the messaging section under the "When A Message Comes In" setting and select HTTP POST and Webhook. Now, SMS message data will be forwarded to your app for a reply with the arrival info.
-
+If you change any settings in the zappa_settings.json file, like adding database variables or setting a debug number (a 10-digit phone number that won't get saved to your database, for testing purposes), you can update your zappa deployment by running:
+```
+zappa update dev
+```
 
 ## Authors
 
