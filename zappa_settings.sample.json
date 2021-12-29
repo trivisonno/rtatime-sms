@@ -1,17 +1,11 @@
 {
     "dev": {
-        "app_function": "app.app",
-        "aws_region": "us-east-1",
-        "profile_name": "default",
-        "project_name": "rtatime-sms",
-        "runtime": "python3.8",
-        "s3_bucket": "",
         "include": [
             "routesAtEachStop.json", "test-postedStopIDMapping.json", "test-rta_stops.geojson"
         ],
         "environment_variables": {
-            "twilio_account_sid": "",
-            "twilio_auth_token": "",
+            "twilio_account_sid": "<YOUR_TWILIO_ACCOUNT_SID_HERE>",
+            "twilio_auth_token": "<YOUR_TWILIO_AUTH_TOKEN_HERE>",
             "psycopg2_user": "",
             "psycopg2_password": "",
             "psycopg2_host": "",

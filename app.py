@@ -31,7 +31,8 @@ if os.environ.get('psycopg2_dbname') != "":
           id int PRIMARY KEY NOT NULL,
           phone varchar NOT NULL,
           stop varchar NOT NULL,
-          wkb_geometry geometry NOT NULL,
+          wkb_geometry geometry,
+          sid varchar,
           t timestamp with time zone NOT NULL
         );""");
     conn.commit()
@@ -40,6 +41,8 @@ if os.environ.get('psycopg2_dbname') != "":
 # The primary app function of sending an SMS reply with real-time vehicle arrival info.
 @app.route("/sms", methods=['GET', 'POST'])
 def incoming_sms():
+    client = Client(os.environ.get('twilio_account_sid'), os.environ.get('twilio_auth_token'))
+
     with open('routesAtEachStop.json','r', encoding='utf-8') as f:
         routesAtEachStop = json.loads(f.read())
 
@@ -51,19 +54,22 @@ def incoming_sms():
 
     """Send a dynamic reply to an incoming text message"""
     # Get the message the user sent our Twilio number
+    twilioNumber = request.values.get('To', None)
     body = request.values.get('Body', None)
     phone = request.values.get('From', None)[-10:]
 
-    # Start our TwiML response
-    resp = MessagingResponse()
 
     mostCompressReturnText = {}
 
     stopNum = re.search(r"(?<!\d)\d{5}(?!\d)", body)
     if stopNum == None:
-        resp.message('Please send only the five-digit stop number!')
         print('Please send only the five-digit stop number!')
-        return str(resp)
+        message = client.messages.create(
+                                  from_=twilioNumber,
+                                  body="Please send only the five-digit stop number!",
+                                  to='+1'+phone
+                              )
+        return ''
 
     stopNum = stopNum.group()
 
@@ -71,10 +77,15 @@ def incoming_sms():
     try:
         rtaStopName = list(filter(lambda x:x["properties"]["stop_id"]==stopNum,rtaStops['features']))[0]['properties']['stop_name']
     except:
-        resp.message("Sorry, we can't find that stop number! We will check with RTA and try to correct the error.")
         print("Sorry, we can't find that stop number! We will check with RTA and try to correct the error.")
-        if os.environ.get('psycopg2_dbname') != "": saveToTable(lng, lat, phone, stop)
-        return str(resp)
+        if phone != os.environ.get('debug_phone_number')[-10:]:
+            if os.environ.get('psycopg2_dbname') != "": saveToTable(None, None, phone, stopNum)
+        message = client.messages.create(
+                                  from_=twilioNumber,
+                                  body="Sorry, we can't find that stop number! We will check with RTA and try to correct the error.",
+                                  to='+1'+phone
+                              )
+        return ''
 
     # Second, we find the internal NextConnect system's stopID, which is different than the sign's posted Stop #.
     stopID = str(stopMap[stopNum])
@@ -143,21 +154,30 @@ def incoming_sms():
         mostCompressReturnTextString = mostCompressReturnTextString +('No more stops here tonight.')
     print(mostCompressReturnTextString)
     mostCompressReturnTextString = mostCompressReturnTextString.strip()
-    resp.message(mostCompressReturnTextString)
+
+
+    # test new method of sending the sms
+    message = client.messages.create(
+                              from_=twilioNumber,
+                              body=mostCompressReturnTextString,
+                              to='+1'+phone
+                          )
+
+    print('sid:', message.sid)
 
     if os.environ.get('psycopg2_dbname') != "":
         rtaStopCoordLat, rtaStopCoordLng = list(filter(lambda x:x["properties"]["stop_id"]==stopNum,rtaStops['features']))[0]['geometry']['coordinates'][1], list(filter(lambda x:x["properties"]["stop_id"]==stopNum,rtaStops['features']))[0]['geometry']['coordinates'][0]
         lat, lng, phone, stop = rtaStopCoordLat, rtaStopCoordLng, phone, stopNum
 
         if phone != os.environ.get('debug_phone_number')[-10:]:
-            saveToTable(lng, lat, phone, stop)
+            saveToTable(lng, lat, phone, stop, message.sid)
 
-    return str(resp)
+    return ''
 
 # If the postgresql environment variables are empty, then the panel features are disabled.
 @app.route("/panel", methods=['GET', 'POST'])
 def panel():
-    if os.environ.get('psycopg2_dbname') != "":
+    if os.environ.get('psycopg2_dbname') == "":
         return 'Database features disabled.'
 
     with open('test-rta_stops.geojson', 'r', encoding='utf-8') as f:
@@ -168,7 +188,10 @@ def panel():
     newResults = []
     for result in results:
         newResult = list(result)
-        rtaStopName = list(filter(lambda x:x["properties"]["stop_id"]==result[2],rtaStops['features']))[0]['properties']['stop_name']
+        try:
+            rtaStopName = list(filter(lambda x:x["properties"]["stop_id"]==result[2],rtaStops['features']))[0]['properties']['stop_name']
+        except:
+            rtaStopName = ''
         newResult.append(rtaStopName)
         newResults.append(newResult)
 
@@ -182,44 +205,61 @@ def panel():
 # If the postgresql environment variables are empty, then the panel features are disabled.
 @app.route("/status/<sms>/", methods=['GET', 'POST'])
 def status(sms):
-    if os.environ.get('psycopg2_dbname') != "":
+    if os.environ.get('psycopg2_dbname') == "":
         return 'Database features disabled.'
 
     from datetime import datetime
     client = Client(os.environ.get('twilio_account_sid'), os.environ.get('twilio_auth_token'))
 
-    results = getOneFromTable()
-    timeafter = results[0][0]
-    timebefore = results[0][0] + timedelta(seconds=1)
-    tz = pytz.timezone('America/New_York')
+    results = getOneFromTable(sms)
+    if results[0][2] == None:
+        timeafter = results[0][0]
+        timebefore = results[0][0] + timedelta(seconds=1)
+        tz = pytz.timezone('America/New_York')
 
-    messages = client.messages.list(
-                                   date_sent_after=timeafter,
-                                   date_sent_before=timebefore,
-                                   to=results[0][1],
-                                   limit=20
-                               )
+        messages = client.messages.list(
+                                       date_sent_after=timeafter,
+                                       date_sent_before=timebefore,
+                                       to=results[0][1],
+                                       limit=20
+                                   )
 
-    sid = record.sid
-    timestring = results[0][0].astimezone(tz).strftime('%Y-%m-%d %H:%M:%S %A')
-    bodystring = messages[0].body.replace('\n','<br>')
-    price = messages[0].price if messages[0].price != None else '?'
-    numsegments = messages[0].num_segments
-    numchars = str(len(messages[0].body))
+        sid = messages[0].sid
+        timestring = results[0][0].astimezone(tz).strftime('%Y-%m-%d %H:%M:%S %A')
+        bodystring = messages[0].body.replace('\n','<br>')
+        price = messages[0].price if messages[0].price != None else '?'
+        numsegments = messages[0].num_segments
+        numchars = str(len(messages[0].body))
 
-    return sid+"<br>(" + timestring + ")<br><br>"+bodystring+'<br><br>Cost: '+ price+" ("+numsegments+" segments, "+ numchars + " chars)"
+        return sid+"<br>(" + timestring + ")<br><br>"+bodystring+'<br><br>Cost: '+ price+" ("+numsegments+" segments, "+ numchars + " chars)"
+
+    else:
+        message = client.messages(results[0][2]).fetch()
+        sid = message.sid
+        timestring = message.date_sent.astimezone(tz).strftime('%a, %d %b %Y %H:%M:%S %z')
+        bodystring = message.body.replace('\n','<br>')
+        price = message.price if message.price != None else '?'
+        numsegments = message.num_segments
+        numchars = str(len(message.body))
+
+        return sid+"<br>(" + timestring + ")<br><br>"+bodystring+'<br><br>Cost: '+ price+" ("+numsegments+" segments, "+ numchars + " chars)"
 
 
-def saveToTable(lng, lat, phone, stop):
-    cur.execute("SET timezone = 'America/New_York'; INSERT INTO rtatime(wkb_geometry, phone, stop, t) VALUES (ST_SetSRID(ST_MakePoint(%s, %s),4326), %s, %s, NOW());", (lng, lat, phone, stop))
+
+
+def saveToTable(lng, lat, phone, stop, sid):
+    if (lat == None or lng == None):
+        cur.execute("SET timezone = 'America/New_York'; INSERT INTO rtatime(phone, stop, t) VALUES (%s, %s, NOW());", (phone, stop))
+    else:
+        cur.execute("SET timezone = 'America/New_York'; INSERT INTO rtatime(wkb_geometry, phone, stop, t, sid) VALUES (ST_SetSRID(ST_MakePoint(%s, %s),4326), %s, %s, NOW(), %s);", (lng, lat, phone, stop, sid))
     conn.commit()
 
 
 def getOneFromTable(sms):
-    cur.execute("SELECT t, phone FROM rtatime WHERE id=%s", (sms, ))
+    cur.execute("SELECT t, phone, sid FROM rtatime WHERE id=%s", (sms, ))
     return cur.fetchall()
 
 
 def getAllFromTable():
-    cur.execute("SELECT *, ST_X(wkb_geometry) as lat, ST_Y(wkb_geometry) as lng FROM rtatime ORDER BY t DESC")
+    cur.execute("SELECT id, phone, stop, wkb_geometry, t, ST_X(wkb_geometry) as lat, ST_Y(wkb_geometry) as lng FROM rtatime ORDER BY t DESC")
     return cur.fetchall()

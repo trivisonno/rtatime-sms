@@ -46,9 +46,9 @@
 {% for result in results %}
 <tr>
   <td><a href="./status/{{ result[0] }}/">{{ result[0] }}</a></td>
-  <td>{{ result[1][2:5] }}-***-{{ result[1][8:12] }}</td>
+  <td>{{ result[1][0:3] }}-***-{{ result[1][6:10] }}</td>
   <!--<td>{{ result[1][2:5] }}- result[1][5:8] -{{ result[1][8:12] }}</td>-->
-  <td><a target='_blank' href='https://www.google.com/maps/search/{{ result[6] }},{{ result[5] }}'>{{ result[2] }}</a> {% if result[13] %}<button type="button" class="btn btn-outline-primary btn-sm" onclick="toggleTransit('transit-{{ result[1] }}')">show/hide transit</button> <div style="display:none" id='transit-{{ result[1] }}'>{{ result[13]|safe if result[13] }}</div>{% endif %}</td>
+  <td>{% if result[6] %}<a target='_blank' href='https://www.google.com/maps/search/{{ result[6] }},{{ result[5] }}'>{% endif %}{{ result[2] }}{% if result[6] %}</a>{% endif %} {% if result[13] %}<button type="button" class="btn btn-outline-primary btn-sm" onclick="toggleTransit('transit-{{ result[1] }}')">show/hide transit</button> <div style="display:none" id='transit-{{ result[1] }}'>{{ result[13]|safe if result[13] }}</div>{% endif %}</td>
   <td> {{ result[7] }}</td>
   <td>{{ result[4].strftime('%Y-%m-%d %H:%M:%S %A') }}</a></td>
 
